@@ -40,11 +40,18 @@ Se la webcam corretta non e la prima, prova ad esempio:
 python hand_tracker.py --camera 1
 ```
 
+Per ridurre ulteriormente l'ampiezza del movimento della mano, aumenta la sensibilita. Per un movimento piu morbido, riduci il valore di smoothing:
+
+```powershell
+python hand_tracker.py --camera 1 --sensitivity 2.6 --smoothing 0.14
+```
+
+La sensibilita predefinita e `2.1`; `smoothing` accetta valori da `0.01` a `1.0`, dove valori minori sono piu fluidi ma introducono un po' piu ritardo.
+
 ## Comandi e gesti
 
-- Muovi l'indice: muove il cursore.
-- Unisci pollice e indice: tiene premuto il pulsante sinistro del mouse.
-- Apri di nuovo le dita: rilascia il pulsante. Un pinch breve equivale quindi a un click, uno mantenuto consente il trascinamento.
+- Tieni uniti pollice e indice e sposta la mano: muove il cursore come se lo afferrassi e trascinassi.
+- Un pinch breve senza spostare la mano: equivale a un click sinistro, utile per selezionare elementi.
 - All'avvio il mouse e in pausa. Premi `m` per attivarlo; premi di nuovo `m` per sospenderlo.
 - `q` o `Esc`: chiude l'applicazione e rilascia sempre il pulsante del mouse.
 
@@ -57,5 +64,5 @@ Alla prima esecuzione, macOS puo chiedere l'accesso alla Fotocamera. Per muovere
 ## Risoluzione problemi
 
 - Schermata nera o errore webcam: chiudi Teams, Zoom e le schede browser che la stanno usando; in Windows verifica anche **Impostazioni > Privacy e sicurezza > Fotocamera**, poi prova `python hand_tracker.py --camera 1`.
-- Cursore troppo sensibile: aumenta `smoothing` in `Settings` (ad esempio `0.38`).
+- Cursore troppo sensibile: riduci `--sensitivity` (ad esempio `1.6`) oppure aumenta `--smoothing` (ad esempio `0.30`).
 - Pinch che scatta troppo facilmente o troppo tardi: regola `pinch_down_threshold` e `pinch_up_threshold` in `Settings`, mantenendo il secondo valore maggiore del primo.

@@ -21,9 +21,12 @@ class Settings:
     detection_confidence: float = 0.65
     tracking_confidence: float = 0.65
     screen_margin: float = 0.08
-    smoothing: float = 0.28
+    smoothing: float = 0.18
+    cursor_gain: float = 2.1
     pinch_down_threshold: float = 0.38
     pinch_up_threshold: float = 0.52
+    pinch_move_threshold: float = 14.0
+    pinch_click_max_duration: float = 0.55
     lost_hand_release_frames: int = 10
 
 
@@ -39,7 +42,11 @@ class HandMouseController:
         self.settings = settings
         self.screen_width, self.screen_height = pyautogui.size()
         self.enabled = False
-        self.mouse_is_down = False
+        self.pinch_active = False
+        self.pinch_moved = False
+        self.pinch_started_at = 0.0
+        self.pinch_start_hand: tuple[float, float] | None = None
+        self.pinch_start_cursor: tuple[int, int] | None = None
         self.filtered_x: float | None = None
         self.filtered_y: float | None = None
         self.frames_without_hand = 0
@@ -73,8 +80,9 @@ class HandMouseController:
             1 + normalized_y * usable_height,
         )
 
-    def _move_mouse(self, landmark) -> None:
-        target_x, target_y = self._screen_position(landmark)
+    def _move_mouse_to(self, target_x: float, target_y: float) -> None:
+        target_x = min(max(target_x, 1), max(self.screen_width - 2, 1))
+        target_y = min(max(target_y, 1), max(self.screen_height - 2, 1))
         if self.filtered_x is None or self.filtered_y is None:
             self.filtered_x, self.filtered_y = target_x, target_y
         else:
@@ -84,15 +92,52 @@ class HandMouseController:
 
         pyautogui.moveTo(round(self.filtered_x), round(self.filtered_y), _pause=False)
 
-    def _release_mouse(self) -> None:
-        if self.mouse_is_down:
-            pyautogui.mouseUp(_pause=False)
-            self.mouse_is_down = False
+    def _start_pinch(self, index_tip) -> None:
+        self.pinch_active = True
+        self.pinch_moved = False
+        self.pinch_started_at = time.monotonic()
+        self.pinch_start_hand = self._screen_position(index_tip)
+        self.pinch_start_cursor = pyautogui.position()
+        self.filtered_x, self.filtered_y = self.pinch_start_cursor
+
+    def _move_from_pinch(self, index_tip) -> None:
+        if self.pinch_start_hand is None or self.pinch_start_cursor is None:
+            return
+
+        hand_x, hand_y = self._screen_position(index_tip)
+        target_x = self.pinch_start_cursor[0] + (
+            hand_x - self.pinch_start_hand[0]
+        ) * self.settings.cursor_gain
+        target_y = self.pinch_start_cursor[1] + (
+            hand_y - self.pinch_start_hand[1]
+        ) * self.settings.cursor_gain
+        movement = math.hypot(
+            target_x - self.pinch_start_cursor[0],
+            target_y - self.pinch_start_cursor[1],
+        )
+        if movement >= self.settings.pinch_move_threshold:
+            self.pinch_moved = True
+            self._move_mouse_to(target_x, target_y)
+
+    def _cancel_pinch(self) -> None:
+        self.pinch_active = False
+        self.pinch_moved = False
+        self.pinch_start_hand = None
+        self.pinch_start_cursor = None
+
+    def _finish_pinch(self) -> None:
+        is_click = (
+            not self.pinch_moved
+            and time.monotonic() - self.pinch_started_at <= self.settings.pinch_click_max_duration
+        )
+        self._cancel_pinch()
+        if is_click:
+            pyautogui.click(_pause=False)
 
     def toggle(self) -> None:
         self.enabled = not self.enabled
         if not self.enabled:
-            self._release_mouse()
+            self._cancel_pinch()
 
     def process_hand(self, landmarks) -> float:
         """Move the pointer and press/release based on the current hand pose."""
@@ -100,34 +145,34 @@ class HandMouseController:
         if not self.enabled:
             return self._pinch_ratio(landmarks)
 
-        self._move_mouse(landmarks[self.INDEX_TIP])
         pinch_ratio = self._pinch_ratio(landmarks)
 
         # Separate thresholds prevent jitter near the pinch boundary.
-        if not self.mouse_is_down and pinch_ratio <= self.settings.pinch_down_threshold:
-            pyautogui.mouseDown(_pause=False)
-            self.mouse_is_down = True
-        elif self.mouse_is_down and pinch_ratio >= self.settings.pinch_up_threshold:
-            self._release_mouse()
+        if not self.pinch_active and pinch_ratio <= self.settings.pinch_down_threshold:
+            self._start_pinch(landmarks[self.INDEX_TIP])
+        elif self.pinch_active and pinch_ratio >= self.settings.pinch_up_threshold:
+            self._finish_pinch()
+        elif self.pinch_active:
+            self._move_from_pinch(landmarks[self.INDEX_TIP])
 
         return pinch_ratio
 
     def hand_missing(self) -> None:
         self.frames_without_hand += 1
         if self.frames_without_hand >= self.settings.lost_hand_release_frames:
-            self._release_mouse()
+            self._cancel_pinch()
 
     def close(self) -> None:
-        self._release_mouse()
+        self._cancel_pinch()
 
 
 def draw_interface(frame, controller: HandMouseController, pinch_ratio: float | None) -> None:
     state = "ON" if controller.enabled else "PAUSED"
     state_color = (70, 220, 70) if controller.enabled else (60, 180, 255)
-    pointer_state = "DRAG" if controller.mouse_is_down else "READY"
+    pointer_state = "MOVE" if controller.pinch_active else "READY"
     lines = [
         (f"Mouse: {state}  |  {pointer_state}", state_color),
-        ("m: toggle mouse    q / Esc: quit", (235, 235, 235)),
+        ("pinch + move: cursor    pinch tap: click    m: toggle    q / Esc: quit", (235, 235, 235)),
     ]
     if pinch_ratio is not None:
         lines.append((f"Pinch: {pinch_ratio:.2f}", (235, 235, 235)))
@@ -193,8 +238,30 @@ def parse_arguments() -> Settings:
     parser.add_argument("--camera", type=int, default=0, help="Webcam index (default: 0)")
     parser.add_argument("--width", type=int, default=1280, help="Capture width (default: 1280)")
     parser.add_argument("--height", type=int, default=720, help="Capture height (default: 720)")
+    parser.add_argument(
+        "--sensitivity",
+        type=float,
+        default=2.1,
+        help="Cursor gain while pinching (default: 2.1)",
+    )
+    parser.add_argument(
+        "--smoothing",
+        type=float,
+        default=0.18,
+        help="Motion smoothing from 0.01 to 1.0; lower is smoother (default: 0.18)",
+    )
     args = parser.parse_args()
-    return Settings(camera_index=args.camera, frame_width=args.width, frame_height=args.height)
+    if args.sensitivity <= 0:
+        parser.error("--sensitivity must be greater than zero")
+    if not 0.01 <= args.smoothing <= 1.0:
+        parser.error("--smoothing must be between 0.01 and 1.0")
+    return Settings(
+        camera_index=args.camera,
+        frame_width=args.width,
+        frame_height=args.height,
+        cursor_gain=args.sensitivity,
+        smoothing=args.smoothing,
+    )
 
 
 def main() -> None:

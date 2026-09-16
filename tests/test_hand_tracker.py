@@ -29,24 +29,40 @@ class HandMouseControllerTests(unittest.TestCase):
     @patch("hand_tracker.pyautogui")
     def test_pinch_presses_once_and_releases_after_opening_hand(self, mouse) -> None:
         mouse.size.return_value = (1920, 1080)
+        mouse.position.return_value = (960, 540)
         controller = hand_tracker.HandMouseController(hand_tracker.Settings(smoothing=1.0))
         controller.enabled = True
         pinched_hand = make_hand(0.51, 0.50, 0.50, 0.50)
         open_hand = make_hand(0.85, 0.50, 0.50, 0.50)
 
         controller.process_hand(pinched_hand)
-        controller.process_hand(pinched_hand)
         controller.process_hand(open_hand)
 
-        mouse.mouseDown.assert_called_once_with(_pause=False)
-        mouse.mouseUp.assert_called_once_with(_pause=False)
-        self.assertFalse(controller.mouse_is_down)
+        mouse.click.assert_called_once_with(_pause=False)
+        self.assertFalse(controller.pinch_active)
 
     @patch("hand_tracker.pyautogui")
-    def test_lost_hand_releases_a_drag(self, mouse) -> None:
+    def test_moving_during_a_pinch_moves_cursor_without_clicking(self, mouse) -> None:
         mouse.size.return_value = (1920, 1080)
+        mouse.position.return_value = (960, 540)
         controller = hand_tracker.HandMouseController(
-            hand_tracker.Settings(lost_hand_release_frames=2, smoothing=1.0)
+            hand_tracker.Settings(smoothing=1.0)
+        )
+        controller.enabled = True
+        controller.process_hand(make_hand(0.51, 0.50, 0.50, 0.50))
+        controller.process_hand(make_hand(0.76, 0.50, 0.75, 0.50))
+        controller.process_hand(make_hand(0.85, 0.50, 0.50, 0.50))
+
+        mouse.moveTo.assert_called()
+        mouse.click.assert_not_called()
+        self.assertFalse(controller.pinch_active)
+
+    @patch("hand_tracker.pyautogui")
+    def test_lost_hand_cancels_a_pinch_without_clicking(self, mouse) -> None:
+        mouse.size.return_value = (1920, 1080)
+        mouse.position.return_value = (960, 540)
+        controller = hand_tracker.HandMouseController(
+            hand_tracker.Settings(lost_hand_release_frames=2)
         )
         controller.enabled = True
         controller.process_hand(make_hand(0.51, 0.50, 0.50, 0.50))
@@ -54,8 +70,8 @@ class HandMouseControllerTests(unittest.TestCase):
         controller.hand_missing()
         controller.hand_missing()
 
-        mouse.mouseUp.assert_called_once_with(_pause=False)
-        self.assertFalse(controller.mouse_is_down)
+        mouse.click.assert_not_called()
+        self.assertFalse(controller.pinch_active)
 
 
 if __name__ == "__main__":
