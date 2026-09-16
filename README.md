@@ -40,6 +40,12 @@ Se la webcam corretta non e la prima, prova ad esempio:
 python hand_tracker.py --camera 1
 ```
 
+Per vedere quali videocamere e backend espone OpenCV, senza avviare il controllo del mouse:
+
+```powershell
+python hand_tracker.py --list-cameras
+```
+
 Per ridurre ulteriormente l'ampiezza del movimento della mano, aumenta la sensibilita. Per un movimento piu morbido, riduci il valore di smoothing:
 
 ```powershell
@@ -48,10 +54,17 @@ python hand_tracker.py --camera 1 --sensitivity 2.6 --smoothing 0.14
 
 La sensibilita predefinita e `2.1`; `smoothing` accetta valori da `0.01` a `1.0`, dove valori minori sono piu fluidi ma introducono un po' piu ritardo.
 
+Il pinch usa anche la profondita della mano e richiede dita piu vicine rispetto alla versione iniziale. Se dovesse ancora attivarsi troppo facilmente, riduci la soglia:
+
+```powershell
+python hand_tracker.py --camera 0 --pinch-threshold 0.18
+```
+
 ## Comandi e gesti
 
 - Tieni uniti pollice e indice e sposta la mano: muove il cursore come se lo afferrassi e trascinassi.
 - Un pinch breve senza spostare la mano: equivale a un click sinistro, utile per selezionare elementi.
+- Il cursore puo attraversare tutti i monitor collegati a Windows.
 - All'avvio il mouse e in pausa. Premi `m` per attivarlo; premi di nuovo `m` per sospenderlo.
 - `q` o `Esc`: chiude l'applicazione e rilascia sempre il pulsante del mouse.
 

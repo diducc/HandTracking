@@ -18,7 +18,8 @@ class HandMouseControllerTests(unittest.TestCase):
     @patch("hand_tracker.pyautogui")
     def test_maps_tracking_area_inside_screen_edges(self, mouse) -> None:
         mouse.size.return_value = (1920, 1080)
-        controller = hand_tracker.HandMouseController(hand_tracker.Settings())
+        with patch("hand_tracker.virtual_screen_bounds", return_value=(0, 0, 1920, 1080)):
+            controller = hand_tracker.HandMouseController(hand_tracker.Settings())
 
         top_left = controller._screen_position(SimpleNamespace(x=0.0, y=0.0))
         bottom_right = controller._screen_position(SimpleNamespace(x=1.0, y=1.0))
@@ -30,7 +31,8 @@ class HandMouseControllerTests(unittest.TestCase):
     def test_pinch_presses_once_and_releases_after_opening_hand(self, mouse) -> None:
         mouse.size.return_value = (1920, 1080)
         mouse.position.return_value = (960, 540)
-        controller = hand_tracker.HandMouseController(hand_tracker.Settings(smoothing=1.0))
+        with patch("hand_tracker.virtual_screen_bounds", return_value=(0, 0, 1920, 1080)):
+            controller = hand_tracker.HandMouseController(hand_tracker.Settings(smoothing=1.0))
         controller.enabled = True
         pinched_hand = make_hand(0.51, 0.50, 0.50, 0.50)
         open_hand = make_hand(0.85, 0.50, 0.50, 0.50)

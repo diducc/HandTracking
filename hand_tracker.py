@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import math
 import platform
 import time
@@ -23,8 +24,8 @@ class Settings:
     screen_margin: float = 0.08
     smoothing: float = 0.18
     cursor_gain: float = 2.1
-    pinch_down_threshold: float = 0.38
-    pinch_up_threshold: float = 0.52
+    pinch_down_threshold: float = 0.22
+    pinch_up_threshold: float = 0.34
     pinch_move_threshold: float = 14.0
     pinch_click_max_duration: float = 0.55
     lost_hand_release_frames: int = 10
@@ -40,7 +41,12 @@ class HandMouseController:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.screen_width, self.screen_height = pyautogui.size()
+        (
+            self.screen_left,
+            self.screen_top,
+            self.screen_width,
+            self.screen_height,
+        ) = virtual_screen_bounds()
         self.enabled = False
         self.pinch_active = False
         self.pinch_moved = False
@@ -56,7 +62,11 @@ class HandMouseController:
 
     @staticmethod
     def _distance(point_a, point_b) -> float:
-        return math.hypot(point_a.x - point_b.x, point_a.y - point_b.y)
+        return math.sqrt(
+            (point_a.x - point_b.x) ** 2
+            + (point_a.y - point_b.y) ** 2
+            + (getattr(point_a, "z", 0.0) - getattr(point_b, "z", 0.0)) ** 2
+        )
 
     def _pinch_ratio(self, landmarks) -> float:
         pinch_distance = self._distance(
@@ -76,13 +86,17 @@ class HandMouseController:
         usable_width = max(self.screen_width - 3, 0)
         usable_height = max(self.screen_height - 3, 0)
         return (
-            1 + normalized_x * usable_width,
-            1 + normalized_y * usable_height,
+            self.screen_left + 1 + normalized_x * usable_width,
+            self.screen_top + 1 + normalized_y * usable_height,
         )
 
     def _move_mouse_to(self, target_x: float, target_y: float) -> None:
-        target_x = min(max(target_x, 1), max(self.screen_width - 2, 1))
-        target_y = min(max(target_y, 1), max(self.screen_height - 2, 1))
+        min_x = self.screen_left + 1
+        min_y = self.screen_top + 1
+        max_x = self.screen_left + max(self.screen_width - 2, 1)
+        max_y = self.screen_top + max(self.screen_height - 2, 1)
+        target_x = min(max(target_x, min_x), max_x)
+        target_y = min(max(target_y, min_y), max_y)
         if self.filtered_x is None or self.filtered_y is None:
             self.filtered_x, self.filtered_y = target_x, target_y
         else:
@@ -172,7 +186,8 @@ def draw_interface(frame, controller: HandMouseController, pinch_ratio: float | 
     pointer_state = "MOVE" if controller.pinch_active else "READY"
     lines = [
         (f"Mouse: {state}  |  {pointer_state}", state_color),
-        ("pinch + move: cursor    pinch tap: click    m: toggle    q / Esc: quit", (235, 235, 235)),
+        ("pinch + move: cursor    tap: click", (235, 235, 235)),
+        ("m: toggle    q / Esc: quit", (235, 235, 235)),
     ]
     if pinch_ratio is not None:
         lines.append((f"Pinch: {pinch_ratio:.2f}", (235, 235, 235)))
@@ -181,6 +196,26 @@ def draw_interface(frame, controller: HandMouseController, pinch_ratio: float | 
         y = 34 + index * 29
         cv2.putText(frame, text, (18, y), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (25, 25, 25), 3)
         cv2.putText(frame, text, (18, y), cv2.FONT_HERSHEY_SIMPLEX, 0.72, color, 1)
+
+
+def virtual_screen_bounds() -> tuple[int, int, int, int]:
+    """Return the whole desktop rectangle, including secondary monitors on Windows."""
+    if platform.system() == "Windows":
+        user32 = ctypes.windll.user32
+        try:
+            # Keep cursor coordinates aligned with physical pixels on mixed-DPI monitors.
+            user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        except AttributeError:
+            user32.SetProcessDPIAware()
+        return (
+            user32.GetSystemMetrics(76),  # SM_XVIRTUALSCREEN
+            user32.GetSystemMetrics(77),  # SM_YVIRTUALSCREEN
+            user32.GetSystemMetrics(78),  # SM_CXVIRTUALSCREEN
+            user32.GetSystemMetrics(79),  # SM_CYVIRTUALSCREEN
+        )
+
+    width, height = pyautogui.size()
+    return 0, 0, width, height
 
 
 def camera_backends() -> list[tuple[str, int]]:
@@ -231,6 +266,41 @@ def open_camera(settings: Settings) -> tuple[cv2.VideoCapture, object, str]:
     )
 
 
+def list_cameras() -> None:
+    """Print video streams exposed by OpenCV without moving the mouse."""
+    print("Scanning camera indices 0 to 4...")
+    for camera_index in range(5):
+        found_stream = False
+        for backend_name, backend in camera_backends():
+            camera = cv2.VideoCapture(camera_index, backend)
+            if not camera.isOpened():
+                camera.release()
+                continue
+
+            frame = None
+            for _ in range(20):
+                ok, candidate = camera.read()
+                if ok and candidate is not None and candidate.size:
+                    frame = candidate
+                    break
+                time.sleep(0.05)
+            camera.release()
+
+            if frame is None:
+                continue
+
+            height, width = frame.shape[:2]
+            brightness = cv2.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))[0]
+            print(
+                f"camera {camera_index}: {backend_name}, {width}x{height}, "
+                f"brightness {brightness:.0f}/255"
+            )
+            found_stream = True
+
+        if not found_stream:
+            print(f"camera {camera_index}: no frames")
+
+
 def parse_arguments() -> Settings:
     parser = argparse.ArgumentParser(
         description="Control the mouse cursor using an index finger and a pinch gesture."
@@ -250,17 +320,35 @@ def parse_arguments() -> Settings:
         default=0.18,
         help="Motion smoothing from 0.01 to 1.0; lower is smoother (default: 0.18)",
     )
+    parser.add_argument(
+        "--pinch-threshold",
+        type=float,
+        default=0.22,
+        help="Pinch sensitivity; lower requires fingers to be closer (default: 0.22)",
+    )
+    parser.add_argument(
+        "--list-cameras",
+        action="store_true",
+        help="List camera streams and exit without opening the hand tracker",
+    )
     args = parser.parse_args()
+    if args.list_cameras:
+        list_cameras()
+        raise SystemExit(0)
     if args.sensitivity <= 0:
         parser.error("--sensitivity must be greater than zero")
     if not 0.01 <= args.smoothing <= 1.0:
         parser.error("--smoothing must be between 0.01 and 1.0")
+    if not 0.05 <= args.pinch_threshold < 0.5:
+        parser.error("--pinch-threshold must be between 0.05 and 0.49")
     return Settings(
         camera_index=args.camera,
         frame_width=args.width,
         frame_height=args.height,
         cursor_gain=args.sensitivity,
         smoothing=args.smoothing,
+        pinch_down_threshold=args.pinch_threshold,
+        pinch_up_threshold=args.pinch_threshold + 0.12,
     )
 
 
