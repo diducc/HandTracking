@@ -1,6 +1,6 @@
 # Hand Tracking Mouse
 
-Piccolo controller multipiattaforma che usa webcam e MediaPipe per muovere il mouse con l'indice e fare click tramite pinch tra pollice e indice.
+Piccolo controller multipiattaforma che usa webcam e MediaPipe per controllare il mouse con una mano.
 
 ## Requisiti
 
@@ -46,25 +46,34 @@ Per vedere quali videocamere e backend espone OpenCV, senza avviare il controllo
 python hand_tracker.py --list-cameras
 ```
 
-Per ridurre ulteriormente l'ampiezza del movimento della mano, aumenta la sensibilita. Per un movimento piu morbido, riduci il valore di smoothing:
+Per aumentare l'ampiezza del movimento con il pinch o durante il trascinamento con il pugno, aumenta la sensibilita. Per un movimento piu morbido, riduci il valore di smoothing:
 
 ```powershell
 python hand_tracker.py --camera 1 --sensitivity 2.6 --smoothing 0.14
 ```
 
-La sensibilita predefinita e `2.1`; `smoothing` accetta valori da `0.01` a `1.0`, dove valori minori sono piu fluidi ma introducono un po' piu ritardo.
+La sensibilita predefinita e `1.0`; `smoothing` accetta valori da `0.01` a `1.0`, dove valori minori sono piu fluidi ma introducono un po' piu ritardo.
 
-Il pinch usa anche la profondita della mano e richiede dita piu vicine rispetto alla versione iniziale. Se dovesse ancora attivarsi troppo facilmente, riduci la soglia:
+Il movimento usa il pinch tra pollice e indice. Se dovesse iniziare troppo facilmente, riduci la soglia:
 
 ```powershell
-python hand_tracker.py --camera 0 --pinch-threshold 0.18
+python hand_tracker.py --camera 0 --move-threshold 0.18
+```
+
+Il click usa il pinch tra pollice e medio. Se dovesse attivarsi troppo facilmente, riduci la soglia:
+
+```powershell
+python hand_tracker.py --camera 0 --click-threshold 0.18
 ```
 
 ## Comandi e gesti
 
-- Tieni uniti pollice e indice e sposta la mano: muove il cursore come se lo afferrassi e trascinassi.
-- Un pinch breve senza spostare la mano: equivale a un click sinistro, utile per selezionare elementi.
-- Il cursore puo attraversare tutti i monitor collegati a Windows.
+- Tieni uniti pollice e indice: afferra e muove il cursore. Il movimento e relativo, quindi il cursore non salta quando inizi il gesto.
+- Unisci pollice e medio: click sinistro. Apri nuovamente le dita prima di eseguire un altro click.
+- Pugno chiuso: tiene premuto il pulsante sinistro e consente il trascinamento. Apri la mano per rilasciarlo.
+- Indice e medio estesi e ravvicinati: attivano lo scorrimento. Tieni fermo il palmo e muovi solo le due dita unite in alto o in basso; il movimento dell'intera mano viene ignorato.
+- Palmo aperto: mette in pausa o riattiva il controllo. Il gesto viene eseguito una volta sola finche mantieni il palmo aperto.
+- Il cursore puo attraversare tutti i monitor collegati a Windows. Il fail-safe resta attivo solo negli angoli esterni del desktop virtuale, quindi non interrompe il passaggio tra due monitor.
 - All'avvio il mouse e in pausa. Premi `m` per attivarlo; premi di nuovo `m` per sospenderlo.
 - `q` o `Esc`: chiude l'applicazione e rilascia sempre il pulsante del mouse.
 
@@ -77,5 +86,7 @@ Alla prima esecuzione, macOS puo chiedere l'accesso alla Fotocamera. Per muovere
 ## Risoluzione problemi
 
 - Schermata nera o errore webcam: chiudi Teams, Zoom e le schede browser che la stanno usando; in Windows verifica anche **Impostazioni > Privacy e sicurezza > Fotocamera**, poi prova `python hand_tracker.py --camera 1`.
-- Cursore troppo sensibile: riduci `--sensitivity` (ad esempio `1.6`) oppure aumenta `--smoothing` (ad esempio `0.30`).
-- Pinch che scatta troppo facilmente o troppo tardi: regola `pinch_down_threshold` e `pinch_up_threshold` in `Settings`, mantenendo il secondo valore maggiore del primo.
+- Movimento o trascinamento troppo sensibili: riduci `--sensitivity` (ad esempio `0.8`) oppure aumenta `--smoothing` (ad esempio `0.30`).
+- Pinch di movimento che scatta troppo facilmente o troppo tardi: regola `move_down_threshold` e `move_up_threshold` in `Settings`, mantenendo il secondo valore maggiore del primo.
+- Errore `PyAutoGUI fail-safe`: il controllo passa in pausa anziche chiudere l'app. Sposta il mouse fisico fuori dall'angolo esterno del desktop e premi `m` per riprenderlo.
+- Click che scatta troppo facilmente o troppo tardi: regola `click_down_threshold` e `click_up_threshold` in `Settings`, mantenendo il secondo valore maggiore del primo.
