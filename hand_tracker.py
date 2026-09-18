@@ -31,6 +31,10 @@ class Settings:
     scroll_down_threshold: float = 0.45
     scroll_up_threshold: float = 0.60
     scroll_notch_distance: float = 0.15
+    finger_extension_threshold: float = 1.15
+    minimum_curled_fingers: int = 3
+    pinch_depth_weight: float = 0.25
+    middle_pinch_margin: float = 1.25
     lost_hand_release_frames: int = 10
 
 
@@ -39,15 +43,18 @@ class HandMouseController:
 
     INDEX_TIP = 8
     INDEX_PIP = 6
+    INDEX_MCP = 5
     THUMB_TIP = 4
     MIDDLE_TIP = 12
     MIDDLE_PIP = 10
+    MIDDLE_MCP = 9
     RING_TIP = 16
     RING_PIP = 14
+    RING_MCP = 13
     PINKY_TIP = 20
     PINKY_PIP = 18
+    PINKY_MCP = 17
     WRIST = 0
-    MIDDLE_MCP = 9
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -72,7 +79,6 @@ class HandMouseController:
         self.drag_active = False
         self.drag_start_hand: tuple[float, float] | None = None
         self.drag_start_cursor: tuple[int, int] | None = None
-        self.open_palm_latched = False
         self.last_scroll_relative_y: float | None = None
         self.scroll_active = False
         self.scroll_remainder = 0.0
@@ -92,65 +98,135 @@ class HandMouseController:
             + (getattr(point_a, "z", 0.0) - getattr(point_b, "z", 0.0)) ** 2
         )
 
-    def _pinch_ratio(self, landmarks, finger_tip: int) -> float:
-        pinch_distance = self._distance(
-            landmarks[self.THUMB_TIP], landmarks[finger_tip]
+    @staticmethod
+    def _distance_2d(point_a, point_b) -> float:
+        """Return image-plane distance, which is less noisy than MediaPipe z."""
+        return math.hypot(point_a.x - point_b.x, point_a.y - point_b.y)
+
+    def _palm_size(self, landmarks) -> float:
+        """Return the largest palm span, so the pinch ratio cannot inflate."""
+        return max(
+            self._distance_2d(landmarks[self.WRIST], landmarks[self.MIDDLE_MCP]),
+            self._distance_2d(landmarks[self.WRIST], landmarks[self.INDEX_MCP]),
+            0.001,
         )
-        palm_size = self._distance(landmarks[self.WRIST], landmarks[self.MIDDLE_MCP])
-        return pinch_distance / max(palm_size, 0.001)
+
+    def _pinch_ratio(self, landmarks, finger_tip: int) -> float:
+        """Return the pinch distance of one finger to the thumb, scaled to the palm."""
+        thumb = landmarks[self.THUMB_TIP]
+        finger = landmarks[finger_tip]
+        image_distance = self._distance_2d(thumb, finger)
+        # MediaPipe depth is noisy around touching fingers, so it only corrects
+        # the image distance instead of defining it.
+        depth_distance = abs(getattr(thumb, "z", 0.0) - getattr(finger, "z", 0.0))
+        pinch_distance = math.hypot(
+            image_distance,
+            depth_distance * self.settings.pinch_depth_weight,
+        )
+        return pinch_distance / self._palm_size(landmarks)
 
     def _finger_spacing_ratio(self, landmarks, first_tip: int, second_tip: int) -> float:
         """Return the tip distance scaled to the current palm size."""
-        fingertip_distance = self._distance(landmarks[first_tip], landmarks[second_tip])
-        palm_size = self._distance(landmarks[self.WRIST], landmarks[self.MIDDLE_MCP])
-        return fingertip_distance / max(palm_size, 0.001)
+        fingertip_distance = self._distance_2d(landmarks[first_tip], landmarks[second_tip])
+        return fingertip_distance / self._palm_size(landmarks)
 
     def _finger_is_extended(self, landmarks, tip: int, pip: int) -> bool:
-        """Classify a finger from its distance to the wrist, independent of rotation."""
-        tip_distance = self._distance(landmarks[tip], landmarks[self.WRIST])
-        pip_distance = self._distance(landmarks[pip], landmarks[self.WRIST])
-        return tip_distance > pip_distance * 1.2
+        """Classify a finger from its own joints, rather than camera rotation."""
+        mcp_by_tip = {
+            self.INDEX_TIP: self.INDEX_MCP,
+            self.MIDDLE_TIP: self.MIDDLE_MCP,
+            self.RING_TIP: self.RING_MCP,
+            self.PINKY_TIP: self.PINKY_MCP,
+        }
+        mcp = landmarks[mcp_by_tip[tip]]
+        tip_distance = self._distance_2d(landmarks[tip], mcp)
+        pip_distance = self._distance_2d(landmarks[pip], mcp)
+        wrist_tip_distance = self._distance_2d(landmarks[tip], landmarks[self.WRIST])
+        wrist_pip_distance = self._distance_2d(landmarks[pip], landmarks[self.WRIST])
+        if pip_distance < 0.01:
+            return tip_distance > 0.04
+        return (
+            tip_distance > pip_distance * self.settings.finger_extension_threshold
+            and wrist_tip_distance > wrist_pip_distance * 1.08
+        )
 
     def _recognize_gesture(
         self, landmarks, move_ratio: float, click_ratio: float, scroll_ratio: float
     ) -> str:
-        index_extended = self._finger_is_extended(
-            landmarks, self.INDEX_TIP, self.INDEX_PIP
-        )
-        middle_extended = self._finger_is_extended(
-            landmarks, self.MIDDLE_TIP, self.MIDDLE_PIP
-        )
-        ring_extended = self._finger_is_extended(
-            landmarks, self.RING_TIP, self.RING_PIP
-        )
-        pinky_extended = self._finger_is_extended(
-            landmarks, self.PINKY_TIP, self.PINKY_PIP
-        )
+        extended = {
+            "index": self._finger_is_extended(landmarks, self.INDEX_TIP, self.INDEX_PIP),
+            "middle": self._finger_is_extended(landmarks, self.MIDDLE_TIP, self.MIDDLE_PIP),
+            "ring": self._finger_is_extended(landmarks, self.RING_TIP, self.RING_PIP),
+            "pinky": self._finger_is_extended(landmarks, self.PINKY_TIP, self.PINKY_PIP),
+        }
+        index_extended = extended["index"]
+        middle_extended = extended["middle"]
+        ring_extended = extended["ring"]
+        pinky_extended = extended["pinky"]
 
-        if click_ratio <= self.settings.click_down_threshold or self.click_active:
-            return "CLICK"
-        if move_ratio <= self.settings.move_down_threshold or (
-            self.move_active and move_ratio < self.settings.move_up_threshold
-        ):
-            return "MOVE"
-        if index_extended and middle_extended and ring_extended and pinky_extended:
-            return "PAUSE"
-        if not any((index_extended, middle_extended, ring_extended, pinky_extended)):
-            return "DRAG"
-        if (
+        # Check unambiguous poses first. This prevents a noisy pinch value
+        # from swallowing the two-finger scroll gesture.
+        scroll_pose = (
             index_extended
             and middle_extended
             and not ring_extended
             and not pinky_extended
-            and (
-                scroll_ratio <= self.settings.scroll_down_threshold
-                or (
-                    self.scroll_active
-                    and scroll_ratio < self.settings.scroll_up_threshold
-                )
-            )
+            and scroll_ratio <= self.settings.scroll_down_threshold
+        )
+        if scroll_pose:
+            return "SCROLL"
+        if (
+            self.scroll_active
+            and index_extended
+            and middle_extended
+            and not ring_extended
+            and not pinky_extended
+            and scroll_ratio < self.settings.scroll_up_threshold
         ):
             return "SCROLL"
+
+        curled_fingers = sum(not is_extended for is_extended in extended.values())
+        # The thumb rests close to both the index and the middle tips, so the
+        # middle pinch wins only when it is clearly closer to the thumb.
+        middle_pinch = click_ratio * self.settings.middle_pinch_margin <= move_ratio
+
+        if middle_pinch and (
+            click_ratio <= self.settings.click_down_threshold or self.click_active
+        ):
+            # A fully folded hand is a drag, even when the thumb happens to
+            # rest near the middle fingertip. Less complete poses can still
+            # click with the index folded.
+            if (
+                index_extended
+                or middle_extended
+                or curled_fingers < 4
+                or move_ratio > self.settings.move_down_threshold * 1.2
+                or self.click_active
+            ):
+                return "CLICK"
+
+        if not middle_pinch:
+            if move_ratio <= self.settings.move_down_threshold:
+                # Requiring a fully extended index misses the natural pinch,
+                # where the index stays bent, so a relaxed hand counts too.
+                if index_extended or curled_fingers < 4:
+                    return "MOVE"
+            elif self.move_active and move_ratio < self.settings.move_up_threshold:
+                return "MOVE"
+
+        if (
+            self.drag_active
+            and not index_extended
+            and not middle_extended
+            and curled_fingers >= self.settings.minimum_curled_fingers - 1
+        ):
+            return "DRAG"
+        if (
+            not index_extended
+            and not middle_extended
+            and curled_fingers >= self.settings.minimum_curled_fingers
+        ):
+            return "DRAG"
         return "READY"
 
     def _screen_position(self, landmark) -> tuple[float, float]:
@@ -249,8 +325,7 @@ class HandMouseController:
             landmarks[self.INDEX_TIP].y + landmarks[self.MIDDLE_TIP].y
         ) / 2
         palm_y = landmarks[self.MIDDLE_MCP].y
-        palm_size = self._distance(landmarks[self.WRIST], landmarks[self.MIDDLE_MCP])
-        relative_y = (fingertip_y - palm_y) / max(palm_size, 0.001)
+        relative_y = (fingertip_y - palm_y) / self._palm_size(landmarks)
 
         self.scroll_active = True
         if self.last_scroll_relative_y is None:
@@ -280,6 +355,7 @@ class HandMouseController:
             self._stop_move()
             self._stop_drag()
             self._reset_scroll()
+            self.click_active = False
 
     def process_hand(self, landmarks) -> tuple[float, float]:
         """Move the pointer and execute commands for the currently visible hand."""
@@ -289,17 +365,14 @@ class HandMouseController:
         scroll_ratio = self._finger_spacing_ratio(
             landmarks, self.INDEX_TIP, self.MIDDLE_TIP
         )
+        # Release the click before recognizing the pose. Otherwise the frame
+        # that opens the pinch still sees the old state and fires a second
+        # click, turning every middle pinch into a double click.
+        if self.click_active and click_ratio >= self.settings.click_up_threshold:
+            self.click_active = False
         self.gesture = self._recognize_gesture(
             landmarks, move_ratio, click_ratio, scroll_ratio
         )
-
-        # An open palm toggles only once until the hand leaves that pose.
-        if self.gesture == "PAUSE":
-            if not self.open_palm_latched:
-                self.open_palm_latched = True
-                self.toggle()
-            return move_ratio, click_ratio
-        self.open_palm_latched = False
 
         if not self.enabled:
             self.gesture = "FAILSAFE" if self.failsafe_triggered else "PAUSED"
@@ -324,8 +397,6 @@ class HandMouseController:
             if self.gesture == "CLICK" and not self.click_active:
                 self.click_active = True
                 pyautogui.click(_pause=False)
-            elif self.click_active and click_ratio >= self.settings.click_up_threshold:
-                self.click_active = False
         return move_ratio, click_ratio
 
     def hand_missing(self) -> None:
@@ -335,7 +406,6 @@ class HandMouseController:
             self._stop_drag()
             self._reset_scroll()
             self.click_active = False
-            self.open_palm_latched = False
             self.gesture = "READY"
 
     def close(self) -> None:
@@ -354,7 +424,7 @@ def draw_interface(
     lines = [
         (f"Mouse: {state}  |  {pointer_state}", state_color),
         ("thumb+index: move  thumb+middle: click  fist: drag", (235, 235, 235)),
-        ("index+middle together: scroll  open palm: pause/resume", (235, 235, 235)),
+        ("index+middle together: scroll", (235, 235, 235)),
         ("m: toggle    q / Esc: quit", (235, 235, 235)),
     ]
     if pinch_ratios is not None:

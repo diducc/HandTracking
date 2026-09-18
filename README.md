@@ -69,10 +69,9 @@ python hand_tracker.py --camera 0 --click-threshold 0.18
 ## Comandi e gesti
 
 - Tieni uniti pollice e indice: afferra e muove il cursore. Il movimento e relativo, quindi il cursore non salta quando inizi il gesto.
-- Unisci pollice e medio: click sinistro. Apri nuovamente le dita prima di eseguire un altro click.
+- Unisci pollice e medio: click sinistro. Apri nuovamente le dita prima di eseguire un altro click. Il click scatta solo quando il medio e chiaramente piu vicino al pollice dell'indice; il pinch indice-pollice ha sempre la priorita.
 - Pugno chiuso: tiene premuto il pulsante sinistro e consente il trascinamento. Apri la mano per rilasciarlo.
 - Indice e medio estesi e ravvicinati: attivano lo scorrimento. Tieni fermo il palmo e muovi solo le due dita unite in alto o in basso; il movimento dell'intera mano viene ignorato.
-- Palmo aperto: mette in pausa o riattiva il controllo. Il gesto viene eseguito una volta sola finche mantieni il palmo aperto.
 - Il cursore puo attraversare tutti i monitor collegati a Windows. Il fail-safe resta attivo solo negli angoli esterni del desktop virtuale, quindi non interrompe il passaggio tra due monitor.
 - All'avvio il mouse e in pausa. Premi `m` per attivarlo; premi di nuovo `m` per sospenderlo.
 - `q` o `Esc`: chiude l'applicazione e rilascia sempre il pulsante del mouse.
@@ -87,6 +86,8 @@ Alla prima esecuzione, macOS puo chiedere l'accesso alla Fotocamera. Per muovere
 
 - Schermata nera o errore webcam: chiudi Teams, Zoom e le schede browser che la stanno usando; in Windows verifica anche **Impostazioni > Privacy e sicurezza > Fotocamera**, poi prova `python hand_tracker.py --camera 1`.
 - Movimento o trascinamento troppo sensibili: riduci `--sensitivity` (ad esempio `0.8`) oppure aumenta `--smoothing` (ad esempio `0.30`).
+- Scorrimento: usa solo indice e medio estesi e vicini, con anulare e mignolo piegati; lascia il palmo fermo e muovi le due punte insieme in verticale. Il movimento viene accumulato, quindi non serve uno spostamento ampio in un solo frame.
+- Pinch indice-pollice poco reattivo o click involontari: tieni il medio lontano dal pollice durante il movimento; se serve, aumenta `middle_pinch_margin` in `Settings` per rendere il click piu difficile da attivare per errore.
 - Pinch di movimento che scatta troppo facilmente o troppo tardi: regola `move_down_threshold` e `move_up_threshold` in `Settings`, mantenendo il secondo valore maggiore del primo.
 - Errore `PyAutoGUI fail-safe`: il controllo passa in pausa anziche chiudere l'app. Sposta il mouse fisico fuori dall'angolo esterno del desktop e premi `m` per riprenderlo.
 - Click che scatta troppo facilmente o troppo tardi: regola `click_down_threshold` e `click_up_threshold` in `Settings`, mantenendo il secondo valore maggiore del primo.
